@@ -26,6 +26,7 @@ import Futhark.Analysis.Metrics
 import Futhark.MonadFreshNames
 import qualified Futhark.CodeGen.Backends.CCUDA as CCUDA
 import qualified Futhark.CodeGen.Backends.COpenCL as COpenCL
+import qualified Futhark.CodeGen.Backends.Javascript as JS
 import qualified Futhark.CodeGen.Backends.MulticoreC as MulticoreC
 import qualified Futhark.CodeGen.Backends.SequentialC as SequentialC
 import qualified Futhark.CodeGen.ImpGen.Kernels as ImpGenKernels
@@ -190,11 +191,11 @@ compileCAction fcfg mode outpath =
           liftIO $ writeFile cpath $ SequentialC.asExecutable cprog
           runCC cpath outpath ["-O3", "-std=c99"] ["-lm"]
 
-myCompile :: MonadFreshNames m => ImpCode.Definitions op -> m [(Name, ImpCode.FunctionT op)]
-myCompile xprog = 
-  let ImpCode.Definitions consts (ImpCode.Functions funs) = xprog
-      entry_funs = filter (ImpCode.functionEntry . snd) funs
-  in return entry_funs
+--myCompile :: MonadFreshNames m => ImpCode.Definitions op -> m [(Name, ImpCode.FunctionT op)]
+--myCompile xprog = 
+--  let ImpCode.Definitions consts (ImpCode.Functions funs) = xprog
+--      entry_funs = filter (ImpCode.functionEntry . snd) funs
+--  in return entry_funs
 
 compileCtoWASMAction :: FutharkConfig -> CompilerMode -> FilePath -> Action SeqMem
 compileCtoWASMAction fcfg mode outpath =
@@ -211,14 +212,10 @@ compileCtoWASMAction fcfg mode outpath =
 
       case mode of
         ToLibrary -> do
-          jswrap <- handleWarnings fcfg $ (traverse myCompile <=< ImpGenSequential.compileProg) prog
+          jswrap <- handleWarnings fcfg $ (traverse JS.genJavascript <=< ImpGenSequential.compileProg) prog
           let (h, imp) = SequentialC.asLibrary cprog
-              --lassensImplementation xprog =
-              --    let ImpCode.Definitions consts (ImpCode.Functions funs) = xprog
-              --        entry_funs = filter (ImpCode.functionEntry . snd) funs
-              --    in entry_funs
-
           -- Add something here that takes prog? and creates a javascript file
+          liftIO $ writeFile "javaScriptClass.js" jswrap
           liftIO $ writeFile hpath h
           liftIO $ writeFile cpath imp
         ToExecutable -> do
