@@ -28,7 +28,7 @@ readTypeEnum Cert _ = error "readTypeEnum: cert"
 
 entryFunctions :: MonadFreshNames m => ImpCode.Definitions op -> m [(ImpCode.Name, ImpCode.FunctionT op)]
 entryFunctions prog = 
-  let ImpCode.Definitions consts (ImpCode.Functions funs) = prog
+  let ImpCode.Definitions _ (ImpCode.Functions funs) = prog
       entry_funs = filter (ImpCode.functionEntry . snd) funs
   in return entry_funs
 
@@ -130,7 +130,7 @@ jsWrapEntryPoint jse =
   "    futhark_entry_" ++ func_name ++ "(this.ctx, " ++ rets ++ ", " ++ args ++ ");",
   results,  
   "    futhark_context_sync(this.ctx);",
-  "    return res0[0];",
+  "    return [" ++ res ++ "];",
   "}"]
   where
     func_name = name jse
@@ -139,6 +139,8 @@ jsWrapEntryPoint jse =
     results = unlines $ map (\i -> resDataHeap i (convTypes !! i)) [0..(length (ret jse)) - 1]
     rets = tail (unwords [",dataHeap" ++ show i ++ ".byteOffset" | i <- [0..((length (parameters jse)) - 1)]])
     args = tail (unwords [",in" ++ show i | i <- [1..length (parameters jse)]])
+    res = tail (unwords [",res" ++ show i ++ "[0]" | i <- [0..((length (parameters jse)) - 1)]])
+ 
     
 cwrapEntryPoint :: EntryPointName -> String
 cwrapEntryPoint ename = 
