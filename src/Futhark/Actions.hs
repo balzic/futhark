@@ -215,9 +215,18 @@ compileCtoWASMAction fcfg mode outpath =
           jswrap <- handleWarnings fcfg $ (traverse JS.genJavascript <=< ImpGenSequential.compileProg) prog
           let (h, imp) = SequentialC.asLibrary cprog
           -- Add something here that takes prog? and creates a javascript file
-          liftIO $ writeFile "javaScriptClass.js" jswrap
+          liftIO $ writeFile "futharkClass.js" jswrap
           liftIO $ writeFile hpath h
           liftIO $ writeFile cpath imp
+          -- TODO change futhark_entry_main to the right thing
+          -- let ldflags = ["-s EXPORTED_FUNCTIONS=\"['_futhark_context_config_new','_futhark_context_new', '_futhark_entry_main', '_futhark_context_sync', '_malloc']\" -s 'EXTRA_EXPORTED_RUNTIME_METHODS=[\"cwrap\"]' --post-js futharkClass.js"]
+          let ldflags = ["-s", 
+                         "EXPORTED_FUNCTIONS=['_futhark_context_config_new', '_futhark_context_new', '_futhark_entry_main', '_futhark_context_sync', '_malloc']", 
+                         "-s",
+                         "EXTRA_EXPORTED_RUNTIME_METHODS=[\"cwrap\"]",
+                         "--post-js", 
+                         "futharkClass.js"]
+          runEMCC cpath (outpath ++ ".js") [] ldflags
         ToExecutable -> do
           liftIO $ writeFile cpath $ SequentialC.asExecutable cprog
           runEMCC cpath outpath ["-O"] ["-lm"]
