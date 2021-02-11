@@ -253,6 +253,11 @@ transformSOAC pat (Stream w stream_form lam arrs) = do
 
   letBind pat $ DoLoop [] merge loop_form loop_body
 transformSOAC pat (Stencil inputDim neibhoodN neibhoodV invarFun invarV input) = do
+  ts <- mapM lookupType input
+  map_arrs <- resultArray ts
+
+  mapout_params <- mapM (newParam "mapout" . flip toDecl Unique) ts
+
   let merge = []
   -- can maybe bind loop to variable inside loop-body.
   -- The loop body must consists of bindings and a terminating value.

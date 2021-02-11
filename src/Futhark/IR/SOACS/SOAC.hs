@@ -114,7 +114,7 @@ data SOAC lore
       -- 'r'-tuples, but we encode it as 'r' arrs each of size [p]i64.
       [VName]
       -- ...invariant... -> [p]a -> ... -> [p]a -> b.
-      (Lambda lore) -- invariant function
+      (Lambda lore) -- function e.g. (xs[0] + xs[1]. .. xs[n])/n
       [([Int], VName)] -- List of (invariant,arr)
       [VName] -- [...ds...]a, input to stencil.
   deriving (Eq, Ord, Show, Generic)
@@ -287,6 +287,8 @@ singleReduce reds =
   let red_nes = concatMap redNeutral reds
       red_lam = singleBinOp $ map redLambda reds
    in Reduce (mconcat (map redComm reds)) red_lam red_nes
+-- let acc = reduce (+) 0 x
+-- in reduce (+) 0 x
 
 -- | The types produced by a single 'Screma', given the size of the
 -- input array.
