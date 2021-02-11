@@ -114,7 +114,7 @@ data SOAC lore
       -- 'r'-tuples, but we encode it as 'r' arrs each of size [p]i64.
       [VName]
       -- ...invariant... -> [p]a -> ... -> [p]a -> b.
-      (Lambda lore)
+      (Lambda lore) -- invariant function
       [([Int], VName)] -- List of (invariant,arr)
       [VName] -- [...ds...]a, input to stencil.
   deriving (Eq, Ord, Show, Generic)

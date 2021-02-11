@@ -252,6 +252,17 @@ transformSOAC pat (Stream w stream_form lam arrs) = do
         resultBodyM $ res ++ mapout_res'
 
   letBind pat $ DoLoop [] merge loop_form loop_body
+transformSOAC pat (Stencil inputDim neibhoodN neibhoodV invarFun invarV input) = do
+  let merge = []
+  -- can maybe bind loop to variable inside loop-body.
+  -- The loop body must consists of bindings and a terminating value.
+  loop_body <- resultBodyM []
+
+  i <- newVName "i"
+
+  let loop_form = ForLoop i Int64 (inputDim!!0) []
+
+  letBind pat $ DoLoop [] merge loop_form loop_body
 transformSOAC pat (Scatter len lam ivs as) = do
   iter <- newVName "write_iter"
 
