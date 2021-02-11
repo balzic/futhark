@@ -258,10 +258,18 @@ transformSOAC pat (Stencil inputDim neibhoodN neibhoodV invarFun invarV input) =
 
   mapout_params <- mapM (newParam "mapout" . flip toDecl Unique) ts
 
-  let merge = []
+  let merge = zip mapout_params $ map Var map_arrs
   -- can maybe bind loop to variable inside loop-body.
   -- The loop body must consists of bindings and a terminating value.
   loop_body <- resultBodyM []
+  -- two loops for 1-d
+  -- one loop for the map_arrs
+    -- use index to extract values from invarV
+    -- one loop for neibhoodV
+      -- push current index on what you find in neibhoodV
+      -- Write to temporary array mapout
+    -- apply invarFun (invarV,mapout)
+    -- write to mapout
 
   i <- newVName "i"
 
