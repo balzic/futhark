@@ -252,28 +252,70 @@ transformSOAC pat (Stream w stream_form lam arrs) = do
         resultBodyM $ res ++ mapout_res'
 
   letBind pat $ DoLoop [] merge loop_form loop_body
+                                            -- [-2,-1,0,1,2]
 transformSOAC pat (Stencil inputDim neibhoodN neibhoodV invarFun invarV input) = do
   ts <- mapM lookupType input
+  temp_ts <- mapM lookupType neibhoodV
+
   map_arrs <- resultArray ts
+  temp_array <- temporaryArray temp_ts
 
   mapout_params <- mapM (newParam "mapout" . flip toDecl Unique) ts
+  -- maybe only temp_params, and not temp_array, since it does not output anything
+  -- in that case we should remove temp_array variable above 'temporaryArray'
+  temp_params <- mapM (newParam "temp_array" . flip toDecl Nonunique) temp_ts
 
-  let merge = zip mapout_params $ map Var map_arrs
-  -- can maybe bind loop to variable inside loop-body.
-  -- The loop body must consists of bindings and a terminating value.
-  loop_body <- resultBodyM []
-  -- two loops for 1-d
-  -- one loop for the map_arrs
-    -- use index to extract values from invarV
-    -- one loop for neibhoodV
-      -- push current index on what you find in neibhoodV
-      -- Write to temporary array mapout
-    -- apply invarFun (invarV,mapout)
-    -- write to mapout
-
+  let merge = concat [
+                        zip mapout_params $ map Var map_arrs,
+                        zip temp_params $ map Var temp_array
+                     ]
+  
+  let (invariantParams,variantParams) = splitAt (length invarV) (lambdaParams invarFun)
+  
   i <- newVName "i"
+  j <- newVName "j"
+  --relative_offset <- newVName "relative_offset"
 
   let loop_form = ForLoop i Int64 (inputDim!!0) []
+  let inner_loop_form = ForLoop j Int64 neibhoodN []
+  -- can maybe bind loop to variable inside loop-body.
+  -- The loop body must consists of bindings and a terminating value.
+
+  inner_loop_body <- runBodyBinder $ 
+    localScope (scopeOf loop_form <> (scopeOfFParams $ map fst merge) <> scopeOf inner_loop_form) $ do 
+        max_neihbhood_index <- letSubExp "max_neihbhood_index" $ BasicOp $
+          BinOp (Sub Int64 OverflowUndef) neibhoodN (intConst Int64 1) --- MOVE OUT FROM LOOP EVENTUALLY
+        relative_offset <- letSubExp "relative_offset" $ BasicOp $ Index (neibhoodV!!0) $ fullSlice (temp_ts!!0) [DimFix $ Var j]
+                                                    -- Reconsider OverflowUndef???!!!
+        index <- letSubExp "index" $ BasicOp $ BinOp (Add Int64 OverflowUndef) relative_offset (Var i)
+        lower_bounded_index <- letSubExp "lower_bounded_index" $ BasicOp $ BinOp (SMax Int64) index (intConst Int64 0) 
+        higher_bounded_index <- letSubExp "higher_bounded_index" $ BasicOp $ 
+          BinOp (SMin Int64) lower_bounded_index max_neihbhood_index
+
+        input_element <- letSubExp "input_element" $ BasicOp $ Index (input!!0) $ fullSlice (ts!!0) [DimFix $ higher_bounded_index]
+        -- letwith here
+        temp_element <- letSubExp "temp_element" $ BasicOp $ Update (temp_array!!0) (fullSlice (temp_ts!!0) [DimFix $ Var j]) input_element
+
+        resultBodyM []
+
+  loop_body <- runBodyBinder $ 
+    localScope (scopeOf loop_form <> (scopeOfFParams $ map fst merge)) $ do 
+        forM_ (zip invariantParams invarV) $ \(p, (_,arr)) -> do
+          arr_t <- lookupType arr
+          letBindNames [paramName p] $
+            BasicOp $
+              Index arr $
+                fullSlice arr_t [DimFix $ Var i]
+
+        resultBodyM []
+  -- two loops for 1-d
+  -- one loop i for the map_arrs
+    -- make temp_array with size neibhoodN
+    -- use index i to extract tuple/element from invarV
+    -- one loop j for neibhoodV
+      -- set temp_array[j] = input[i+neibhoodV[j]] 
+    -- apply invarFun (invarV,temp_array,mapout)
+    -- write to mapout
 
   letBind pat $ DoLoop [] merge loop_form loop_body
 transformSOAC pat (Scatter len lam ivs as) = do
@@ -393,6 +435,11 @@ resultArray :: Transformer m => [Type] -> m [VName]
 resultArray = mapM oneArray
   where
     oneArray t = letExp "result" $ BasicOp $ Scratch (elemType t) (arrayDims t)
+
+temporaryArray :: Transformer m => [Type] -> m [VName]
+temporaryArray = mapM oneArray
+  where
+    oneArray t = letExp "temporaryArray" $ BasicOp $ Scratch (elemType t) (arrayDims t)
 
 letwith ::
   Transformer m =>
