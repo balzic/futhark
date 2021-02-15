@@ -252,96 +252,75 @@ transformSOAC pat (Stream w stream_form lam arrs) = do
         resultBodyM $ res ++ mapout_res'
 
   letBind pat $ DoLoop [] merge loop_form loop_body
-                                            -- [-2,-1,0,1,2]
+
 transformSOAC pat (Stencil inputDim neibhoodN neibhoodV invarFun invarV input) = do
-  -- two loops for 1-d
-  -- one loop i for the map_arrs
-    -- make temp_array with size neibhoodN
-    -- use index i to extract tuple/element from invarV
-    -- one loop j for neibhoodV
-      -- set temp_array[j] = input[i+neibhoodV[j]]
-    -- apply invarFun (invarV,temp_array,mapout)
-    -- write to mapout
   ts_input <- mapM lookupType input
   ts_neibhoodV <- mapM lookupType neibhoodV
 
-
-
-  let ts = map (\(inp,neib) -> 
+  let ts = map (\(inp,neib) ->
                  let (Array tb_input _ _) = inp in
-                 let (Array _ shp_neibhood uniq) = neib in  
-                 (Array tb_input shp_neibhood uniq)) (zip ts_input ts_neibhoodV)
+                 let (Array _ shp_neibhood uniq) = neib in
+                 (Array tb_input shp_neibhood uniq)) (zip ts_input $ cycle ts_neibhoodV) -- only works for 1d
 
-  temp_ts <- mapM lookupType neibhoodV
   let f_ret_types = lambdaReturnType invarFun
-  let ret_types = map (\(f_ret_type,inp) -> 
+  let ret_types = map (\(f_ret_type,inp) ->
                     let (Array _ shp_input uniq) = inp in
-                    (Array (elemType f_ret_type) shp_input uniq)) (zip f_ret_types ts_input)
+                    (Array (elemType f_ret_type) shp_input uniq)) (zip f_ret_types $ cycle ts_input)
 
   map_arrs <- resultArray ret_types
 
-  mapout_params <- mapM (newParam "stencil_out" . flip toDecl Unique) ret_types
-  -- maybe only temp_params, and not temp_array, since it does not output anything
-  -- in that case we should remove temp_array variable above 'temporaryArray'
+  stencilout_params <- mapM (newParam "stencil_out" . flip toDecl Unique) ret_types
 
-  let merge = concat [
-                        zip mapout_params $ map Var map_arrs
-                     ]
+  let iterated_variables = zip stencilout_params $ map Var map_arrs
 
-  let (invariantParams,variantParams) = splitAt (length invarV) (lambdaParams invarFun)
+  let (invariantParams,variantParams) = splitAt (length invarV) $ map paramName (lambdaParams invarFun)
 
   i <- newVName "i"
   j <- newVName "j"
-  --relative_offset <- newVName "relative_offset"
 
   let loop_form = ForLoop i Int64 (inputDim!!0) []
   let inner_loop_form = ForLoop j Int64 neibhoodN []
-  -- can maybe bind loop to variable inside loop-body.
-  -- The loop body must consists of bindings and a terminating value.
 
+  max_neihbhood_index <- letSubExp "max_neihbhood_index" $ BasicOp $
+    BinOp (Sub Int64 OverflowUndef) neibhoodN (intConst Int64 1)
 
   loop_body <- runBodyBinder $
-    localScope (scopeOf loop_form <> (scopeOfFParams $ map fst merge)) $ do
-        temp_array <- temporaryArray ts
-        temp_params <- mapM (newParam "temporaryArray" . flip toDecl Unique) ts
-        let merge_inner = zip temp_params $ map Var temp_array
+    localScope (scopeOf loop_form <> (scopeOfFParams $ map fst iterated_variables)) $ do
+      temp_array <- temporaryArray ts
+      temp_params <- mapM (newParam "temporaryArray" . flip toDecl Unique) ts
+      let merge_inner = zip temp_params $ map Var temp_array
 
+      forM_ (zip invariantParams invarV) $ \(p, (_,arr)) -> do
+        arr_t <- lookupType arr
+        letBindNames [p] $ BasicOp $ Index arr $ fullSlice arr_t [DimFix $ Var i]
 
-        forM_ (zip invariantParams invarV) $ \(p, (_,arr)) -> do
-          arr_t <- lookupType arr
-          letBindNames [paramName p] $ BasicOp $ Index arr $ fullSlice arr_t [DimFix $ Var i]
+      -- does not consider multi-dim stencils.
+      inner_loop_body <- runBodyBinder $
+        localScope (scopeOf inner_loop_form <> (scopeOfFParams $ map fst merge_inner)) $ do
+          relative_offset <- forM (zip neibhoodV ts_neibhoodV) $ \(vname, tp) -> do
+            letSubExp "relative_offset" $ BasicOp $ Index vname $ fullSlice tp [DimFix $ Var j]
+          -- does not handle overflow.
+          index <- forM relative_offset $ \rel ->
+            letSubExp "index" $ BasicOp $ BinOp (Add Int64 OverflowUndef) rel (Var i)
+          lower_bounded_index <- forM index $ \ix ->
+            letSubExp "lower_bounded_index" $ BasicOp $ BinOp (SMax Int64) ix (intConst Int64 0)
+          higher_bounded_index <- forM lower_bounded_index $ \lbix ->
+            letSubExp "higher_bounded_index" $ BasicOp $ BinOp (SMin Int64) lbix max_neihbhood_index
+          input_element <- forM (zip3 input ts $ cycle higher_bounded_index) $ \(vname, tp, hbix) -> do
+            letSubExp "input_element" $ BasicOp $ Index vname $ fullSlice tp [DimFix hbix]
+          tmp <- letwith (map paramName temp_params) (pexp (Var j)) $
+                    map (BasicOp . SubExp) input_element
+          resultBodyM $ map Var tmp
+      letBindNames variantParams $ DoLoop [] merge_inner inner_loop_form inner_loop_body
 
+      mapM_ addStm $ bodyStms $ lambdaBody invarFun
+      let lambda_res = bodyResult $ lambdaBody invarFun
+      stencil_outarrs <-
+        letwith (map paramName stencilout_params) (pexp (Var i)) $
+          map (BasicOp . SubExp) lambda_res
 
-        inner_loop_body <- runBodyBinder $
-          localScope (scopeOf loop_form <> (scopeOfFParams $ map fst merge) <> scopeOf inner_loop_form <> (scopeOfFParams $ map fst merge_inner)) $ do
-              max_neihbhood_index <- letSubExp "max_neihbhood_index" $ BasicOp $
-                BinOp (Sub Int64 OverflowUndef) neibhoodN (intConst Int64 1) --- MOVE OUT FROM LOOP EVENTUALLY
-              relative_offset <- letSubExp "relative_offset" $ BasicOp $ Index (neibhoodV!!0) $ fullSlice (temp_ts!!0) [DimFix $ Var j]
-                                                          -- Reconsider OverflowUndef???!!!
-              index <- letSubExp "index" $ BasicOp $ BinOp (Add Int64 OverflowUndef) relative_offset (Var i)
-              lower_bounded_index <- letSubExp "lower_bounded_index" $ BasicOp $ BinOp (SMax Int64) index (intConst Int64 0)
-              higher_bounded_index <- letSubExp "higher_bounded_index" $ BasicOp $
-                BinOp (SMin Int64) lower_bounded_index max_neihbhood_index
-
-              input_element <- letSubExp "input_element" $ BasicOp $ Index (input!!0) $ fullSlice (ts!!0) [DimFix $ higher_bounded_index]
-              tmp <- letwith (map paramName temp_params) (pexp (Var j)) $
-                        map (BasicOp . SubExp) [input_element]
-              resultBodyM $ map Var tmp
-        tile_params <- mapM (newParam "tiles" . flip toDecl Unique) ts
-        letBindNames (map paramName tile_params) $ DoLoop [] merge_inner inner_loop_form inner_loop_body
-        
-        forM_ (zip variantParams $ map paramName tile_params) $ \(p, arr) -> do
-          letBindNames [paramName p] $ BasicOp $ SubExp (Var arr)
-
-        mapM_ addStm $ bodyStms $ lambdaBody invarFun
-        let lambda_res = bodyResult $ lambdaBody invarFun
-        stencil_outarrs <-
-          letwith (map paramName mapout_params) (pexp (Var i)) $
-            map (BasicOp . SubExp) lambda_res
-
-        resultBodyM $ map Var stencil_outarrs
-
-  letBind pat $ DoLoop [] merge loop_form loop_body
+      resultBodyM $ map Var stencil_outarrs
+  letBind pat $ DoLoop [] iterated_variables loop_form loop_body
 transformSOAC pat (Scatter len lam ivs as) = do
   iter <- newVName "write_iter"
 
