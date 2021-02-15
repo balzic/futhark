@@ -262,9 +262,21 @@ transformSOAC pat (Stencil inputDim neibhoodN neibhoodV invarFun invarV input) =
       -- set temp_array[j] = input[i+neibhoodV[j]]
     -- apply invarFun (invarV,temp_array,mapout)
     -- write to mapout
-  ts <- mapM lookupType input
+  ts_input <- mapM lookupType input
+  ts_neibhoodV <- mapM lookupType neibhoodV
+
+
+
+  let ts = map (\(inp,neib) -> 
+                 let (Array tb_input _ _) = inp in
+                 let (Array _ shp_neibhood uniq) = neib in  
+                 (Array tb_input shp_neibhood uniq)) (zip ts_input ts_neibhoodV)
+
   temp_ts <- mapM lookupType neibhoodV
-  let ret_types = lambdaReturnType invarFun
+  let f_ret_types = lambdaReturnType invarFun
+  let ret_types = map (\(f_ret_type,inp) -> 
+                    let (Array _ shp_input uniq) = inp in
+                    (Array (elemType f_ret_type) shp_input uniq)) (zip f_ret_types ts_input)
 
   map_arrs <- resultArray ret_types
 
@@ -312,16 +324,14 @@ transformSOAC pat (Stencil inputDim neibhoodN neibhoodV invarFun invarV input) =
                 BinOp (SMin Int64) lower_bounded_index max_neihbhood_index
 
               input_element <- letSubExp "input_element" $ BasicOp $ Index (input!!0) $ fullSlice (ts!!0) [DimFix $ higher_bounded_index]
-              -- letwith here
               tmp <- letwith (map paramName temp_params) (pexp (Var j)) $
                         map (BasicOp . SubExp) [input_element]
-              --tmp <- letSubExp "temp_element" $ BasicOp $ Update (temp_array!!0) (fullSlice (temp_ts!!0) [DimFix $ Var j]) input_element
               resultBodyM $ map Var tmp
         tile_params <- mapM (newParam "tiles" . flip toDecl Unique) ts
         letBindNames (map paramName tile_params) $ DoLoop [] merge_inner inner_loop_form inner_loop_body
+        
         forM_ (zip variantParams $ map paramName tile_params) $ \(p, arr) -> do
-          arr_t <- lookupType arr
-          letBindNames [paramName p] $ BasicOp $ Index arr $ fullSlice arr_t [DimFix $ Var i]
+          letBindNames [paramName p] $ BasicOp $ SubExp (Var arr)
 
         mapM_ addStm $ bodyStms $ lambdaBody invarFun
         let lambda_res = bodyResult $ lambdaBody invarFun
