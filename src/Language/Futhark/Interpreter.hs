@@ -1586,7 +1586,7 @@ initialCtx =
                     (_, is') = fromArray is
                     hood i = toArray' as_rowshape $ map getElem $ map ((+ i) . asInt64) is'
                     hoods = map hood [0 .. n -1]
-                toArray' rowshape
+                toArray rowshape
                   <$> zipWithM (apply2 noLoc mempty f) (snd $ fromArray cs) hoods
               | otherwise ->
                 error $ "Bad return type: " ++ pretty ret_t
@@ -1601,26 +1601,33 @@ initialCtx =
         ValueFun $ \v ->
           case (fromTuple v, unfoldFunType t) of
             (Just [is, f, cs, as], ([_], ret_t))
-              | Just rowshape <- typeRowShape ret_t,
-                ValueArray (ShapeDim n as_shape@(ShapeDim m as_rowshape)) as_arr <- as -> do
+              | Just row_shape <- typeRowShape ret_t,
+                ValueArray (ShapeDim n (ShapeDim m elm_shape)) as_arr <- as,
+                Just ixss <- mapM ((\ix -> case ix of
+                    [k,l] -> Just (k,l)
+                    _ -> Nothing
+                    ) <=< fromTuple)
+                            $ snd $ fromArray is -> do
                 -- We Hardcode the boundary condition to repeat edge element.
-                let bound i n = 0 `max` ((n -1) `min` i)
-                let getElem (i,j) = as_arr ! (fromIntegral ((bound i n)*m + bound j m)) --) ! bound j m
-                    (_, is') = fromArray is
-                    hood i j = toArray' as_shape $ map getElem $ 
-                                map (\ist -> 
-                                    case fromTuple ist of
-                                      Just [k,l] -> (i + asInt64 k, j + asInt64 l)
-                                    ) is'
-                    hoods = concat $ map (\i -> map (hood i) [0 .. m - 1]) [0 .. n -1]
-                error $ "You failed"
-                --toArray' rowshape
-                --  <$> zipWithM (apply2 noLoc mempty f) (snd $ fromArray cs) hoods
+                let bound i = (max 0) . (min i) . (\x -> x - 1)
+                let getElem (i,j) =
+                        case (as_arr ! i) of
+                            ValueArray _ row -> row ! j
+                            _ -> error "Bad input"
+                    hood i j = toArray' elm_shape $ map getElem $
+                                map (\(k,l) -> (fromIntegral $ bound (i + asInt64 k) n
+                                               , fromIntegral $ bound (j + asInt64 l) m
+                                               )
+                                    ) ixss
+                    hoods = map (\i -> map (hood i) [0 .. m - 1]) [0 .. n -1]
+                toArray (ShapeDim n row_shape) <$> forM (zip (snd $ fromArray cs) hoods) (\(cvs, rows) ->
+                        toArray (ShapeDim m elm_shape) <$> zipWithM (apply2 noLoc mempty f) (snd $ fromArray cvs) rows
+                    )
               | otherwise ->
                 error $ "Bad return type: " ++ pretty ret_t
             _ ->
               error $
-                "Invalid arguments to stencil_1d intrinsic:\n"
+                "Invalid arguments to stencil_2d intrinsic:\n"
                   ++ unlines [pretty t, pretty v]
     --
     def "partition" = Just $
